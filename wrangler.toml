@@ -9,7 +9,7 @@ binding = "ASSETS"
 [[d1_databases]]
 binding = "DB"
 database_name = "pulse"
-database_id = "PASTE_ID_HERE_LATER"
+database_id = "ffe9e7b9-0d8a-421f-84b1-5f41d5939167"
 
 [triggers]
 crons = ["0 3 * * *"]
