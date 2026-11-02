@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pulse — Admin</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<style>
+:root{--bg:#0b1416;--surface:#0f1a1c;--surface-2:#17272b;--line:#22363b;
+  --text:#e8f0f2;--dim:#8fa6ad;--accent:#ff5a2e;--ok:#3ddc97;--warn:#e3b341;--bad:#ff6b6b}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);
+  font:14px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:20px}
+.wrap{max-width:960px;margin:0 auto;display:grid;gap:16px}
+h1{font-size:20px;margin:0}
+.sub{color:var(--dim);font-size:13px;margin:0 0 8px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:16px}
+.card h2{font-size:15px;margin:0 0 12px;display:flex;align-items:center;gap:8px}
+.badge{font-size:11px;font-weight:800;padding:2px 8px;border-radius:999px;
+  background:rgba(255,90,46,.15);color:var(--accent);text-transform:uppercase;letter-spacing:.05em}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+button{font-family:inherit;font-size:13px;font-weight:700;border-radius:8px;
+  padding:8px 14px;border:1px solid var(--line);background:var(--surface-2);
+  color:var(--text);cursor:pointer}
+button:hover{border-color:var(--accent);color:var(--accent)}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button.primary:hover{filter:brightness(1.1);color:#fff}
+button.danger{border-color:var(--bad);color:var(--bad)}
+button:disabled{opacity:.45;cursor:not-allowed}
+input,textarea{background:var(--surface-2);border:1px solid var(--line);border-radius:8px;
+  padding:8px 11px;color:var(--text);font:inherit;outline:none;width:100%}
+input:focus,textarea:focus{border-color:var(--accent)}
+.stat{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px}
+.stat div{background:var(--surface-2);border-radius:10px;padding:12px}
+.stat b{display:block;font-size:20px;font-variant-numeric:tabular-nums}
+.stat span{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line)}
+th{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.06em}
+.muted{color:var(--dim);font-size:12.5px}
+.err{background:rgba(255,107,107,.12);border:1px solid var(--bad);color:var(--bad);
+  padding:10px 14px;border-radius:10px;font-size:13px}
+.empty{color:var(--dim);font-size:13px;padding:12px 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div>
+    <h1>Pulse Admin</h1>
+    <p class="sub" id="whoami">Checking access…</p>
+  </div>
+  <div id="err" class="err" hidden></div>
+  <div class="card">
+    <h2>Status</h2>
+    <div class="stat" id="stats"></div>
+  </div>
+  <div class="card">
+    <h2>Election <span class="badge" id="phaseBadge">—</span></h2>
+    <div id="electionBody"></div>
+  </div>
+  <div class="card">
+    <h2>Reports queue</h2>
+    <div id="reportsBody"><div class="empty">Loading…</div></div>
+  </div>
+  <div class="card">
+    <h2>Audit log</h2>
+    <div id="auditBody"><div class="empty">Loading…</div></div>
+  </div>
+</div>
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, m =>
+  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+function ago(sec){
+  const d = Math.max(1, Math.floor(Date.now()/1000 - sec));
+  if (d < 60) return d+'s';
+  if (d < 3600) return Math.floor(d/60)+'m';
+  if (d < 86400) return Math.floor(d/3600)+'h';
+  return Math.floor(d/86400)+'d';
+}
+async function api(path, opts = {}){
+  const res = await fetch('/api'+path, {
+    credentials:'same-origin',
+    headers:{'content-type':'application/json'},
+    ...opts
+  });
+  const data = await res.json().catch(()=>({}));
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+function showErr(m){ const e = $('#err'); e.textContent = m; e.hidden = !m; }
+let me = null;
+async function boot(){
+  try {
+    const r = await api('/me');
+    me = r.user;
+    if (!me){ location.href = '/'; return; }
+    if (!['main_admin','sub_admin'].includes(me.role)){
+      $('#whoami').textContent = 'You are signed in as u/'+me.username+' but do not have admin access.';
+      return;
+    }
+    $('#whoami').innerHTML =
+      `Signed in as <b>u/${esc(me.username)}</b> · role <b>${esc(me.role)}</b>` +
+      (me.role === 'sub_admin' ? ' <span class="muted">(elected, term-limited)</span>' : '');
+    await refresh();
+  } catch (e){ showErr(e.message); }
+}
+async function refresh(){
+  showErr('');
+  try {
+    const [ov, el, rp, au] = await Promise.all([
+      api('/admin/overview'), api('/election'),
+      api('/admin/reports'), api('/admin/audit')
+    ]);
+    renderStats(ov);
+    renderElection(el.election, me);
+    renderReports(rp.reports);
+    renderAudit(au.audit);
+  } catch (e){ showErr(e.message); }
+}
+function renderStats(ov){
+  $('#stats').innerHTML = `
+    <div><b>${ov.openReports}</b><span>Open reports</span></div>
+    <div><b>${ov.hiddenPosts}</b><span>Hidden posts</span></div>
+    <div><b>${ov.hiddenComments}</b><span>Hidden comments</span></div>
+    <div><b>${esc(ov.role)}</b><span>Your role</span></div>`;
+}
+function renderElection(e, me){
+  const body = $('#electionBody');
+  const badge = $('#phaseBadge');
+  if (!e){
+    badge.textContent = 'none';
+    body.innerHTML = me.role === 'main_admin'
+      ? `<p class="muted">No election yet. Start one to open a 5-day nomination window.</p>
+         <button class="primary" id="startEl">Start election</button>`
+      : `<div class="empty">No election is currently running.</div>`;
+    if (me.role === 'main_admin'){
+      $('#startEl').addEventListener('click', async () => {
+        try { await api('/admin/election/start', { method:'POST', body:'{}' }); await refresh(); }
+        catch (e){ showErr(e.message); }
+      });
+    }
+    return;
+  }
+  badge.textContent = e.phase;
+  const endsIn = e.phase === 'nomination'
+    ? Math.max(0, e.nominationEnds - Math.floor(Date.now()/1000))
+    : e.phase === 'voting'
+      ? Math.max(0, e.votingEnds - Math.floor(Date.now()/1000))
+      : 0;
+  const cands = e.candidates || [];
+  const rows = cands.length ? cands.map(c => `
+    <tr>
+      <td><b>u/${esc(c.username)}</b>${c.user_id === (me && me.id) ? ' <span class="muted">(you)</span>' : ''}</td>
+      <td>${esc(c.statement || '—')}</td>
+      <td style="text-align:right">${c.votes}</td>
+      <td style="text-align:right">${c.disqualified ? '<span class="muted">disqualified</span>' : ''}</td>
+      <td style="text-align:right">
+        ${me.role === 'main_admin' && !c.disqualified && e.phase !== 'closed'
+          ? `<button class="danger" data-dq="${c.id}">Disqualify</button>` : ''}
+      </td>
+    </tr>`).join('') : '';
+  body.innerHTML = `
+    <p class="muted">
+      Cycle <b>${esc(e.cycle)}</b> ·
+      ${e.phase === 'closed'
+        ? `Winner: <b>${e.winner ? 'u/'+esc(e.winner) : 'none'}</b>`
+        : `${e.phase === 'nomination' ? 'Nominations' : 'Voting'} close in
+           ${Math.floor(endsIn/86400)}d ${Math.floor((endsIn%86400)/3600)}h`}
+    </p>
+    ${cands.length
+      ? `<table>
+           <thead><tr><th>Candidate</th><th>Statement</th><th style="text-align:right">Votes</th><th></th><th></th></tr></thead>
+           <tbody>${rows}</tbody>
+         </table>`
+      : '<div class="empty">No candidates have nominated yet.</div>'}
+    ${me.role === 'main_admin' && e.phase !== 'closed'
+      ? `<div class="row" style="margin-top:14px">
+           <button id="advanceEl">Force phase advance</button>
+           <span class="muted">Use only if the daily cron has not run.</span>
+         </div>` : ''}`;
+  const adv = $('#advanceEl');
+  if (adv){
+    adv.addEventListener('click', async () => {
+      if (!confirm('Advance the election to the next phase now?')) return;
+      try { await api('/admin/election/advance', { method:'POST', body:'{}' }); await refresh(); }
+      catch (e){ showErr(e.message); }
+    });
+  }
+  body.querySelectorAll('[data-dq]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const reason = prompt('Reason for disqualification (recorded in the audit log):');
+      if (!reason) return;
+      try {
+        await api('/admin/candidate/disqualify', {
+          method:'POST',
+          body: JSON.stringify({ candidateId: btn.dataset.dq, reason })
+        });
+        await refresh();
+      } catch (e){ showErr(e.message); }
+    });
+  });
+}
+function renderReports(reports){
+  const body = $('#reportsBody');
+  if (!reports.length){ body.innerHTML = '<div class="empty">No open reports.</div>'; return; }
+  body.innerHTML = `<table>
+    <thead><tr><th>Target</th><th>Reason</th><th>Reporter</th><th>Age</th><th></th></tr></thead>
+    <tbody>${reports.map(r => `
+      <tr>
+        <td>${esc(r.target_type)}<br><span class="muted">${esc(r.target_id.slice(0,10))}…</span></td>
+        <td>${esc(r.reason)}</td>
+        <td>${r.reporter ? 'u/'+esc(r.reporter) : '<span class="muted">anon</span>'}</td>
+        <td class="muted">${ago(r.created_at)}</td>
+        <td style="text-align:right;white-space:nowrap">
+          <button data-hide="${esc(r.target_id)}" data-type="${esc(r.target_type)}">Hide</button>
+          <button data-resolve="${esc(r.id)}">Resolve</button>
+        </td>
+      </tr>`).join('')}</tbody></table>`;
+  body.querySelectorAll('[data-hide]').forEach(b => b.addEventListener('click', async () => {
+    const reason = prompt('Reason (shown in the audit log):') || 'reported';
+    try {
+      await api('/admin/moderate', { method:'POST', body: JSON.stringify({
+        targetType: b.dataset.type, targetId: b.dataset.hide, action:'hide', reason
+      })});
+      await refresh();
+    } catch (e){ showErr(e.message); }
+  }));
+  body.querySelectorAll('[data-resolve]').forEach(b => b.addEventListener('click', async () => {
+    try {
+      await api('/admin/moderate', { method:'POST', body: JSON.stringify({
+        targetType:'post', targetId: b.dataset.resolve, action:'resolve'
+      })});
+      await refresh();
+    } catch (e){ showErr(e.message); }
+  }));
+}
+function renderAudit(rows){
+  const body = $('#auditBody');
+  if (!rows.length){ body.innerHTML = '<div class="empty">No entries yet.</div>'; return; }
+  body.innerHTML = `<table>
+    <thead><tr><th>When</th><th>Actor</th><th>Action</th><th>Detail</th></tr></thead>
+    <tbody>${rows.map(a => `
+      <tr>
+        <td class="muted">${ago(a.created_at)}</td>
+        <td>${a.actor ? 'u/'+esc(a.actor) : '<span class="muted">system</span>'}</td>
+        <td><b>${esc(a.action)}</b></td>
+        <td class="muted">${esc(a.detail || '')}</td>
+      </tr>`).join('')}</tbody></table>`;
+}
+boot();
+setInterval(() => { if (me && ['main_admin','sub_admin'].includes(me.role)) refresh(); }, 30000);
+</script>
+</body>
+</html>
