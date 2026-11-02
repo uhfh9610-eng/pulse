@@ -1,0 +1,18 @@
+name = "pulse"
+main = "worker.js"
+compatibility_date = "2024-11-01"
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "pulse"
+database_id = "PASTE_ID_HERE_LATER"
+
+[triggers]
+crons = ["0 3 * * *"]
+
+[observability]
+enabled = true
