@@ -1,4 +1,4 @@
-const ITERATIONS = 120000;
+const ITERATIONS = 100000;
 const SESSION_TTL = 60 * 60 * 24 * 30;
 const NOMINATION_DAYS = 5;
 const VOTING_DAYS = 5;
